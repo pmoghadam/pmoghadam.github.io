@@ -1,0 +1,924 @@
+<h1>Slackware 13.37 - BIND / DNSCrypt</h1>
+
+<p>Public domain</p>
+
+<hr />
+
+<h3>Installation</h3>
+
+<pre><code>cd /usr/src
+wget "http://www.isc.org/downloads/file/bind-9-9-5rc2/?version=tar.gz" -O bind-9-9-5rc2.tar.gz
+
+su - install
+cd /usr/src
+tar xf bind-9-9-5rc2.tar.gz
+cd bind-9.9.5
+./configure --prefix=/opt/bind &amp;&amp; make
+make install DESTDIR=/usr/local/encap/bind-9.9.5
+logout
+cd /usr/local/encap/
+epkg bind-9.9.5
+
+mkdir /var/log/named/
+mkdir /etc/bind
+mkdir -p /var/bind/localhost/
+cd /var/bind/
+wget ftp://ftp.internic.net/domain/named.root
+</code></pre>
+
+<hr />
+
+<h3>/etc/bind/rndc.key</h3>
+
+<pre><code>// Key generator : dnssec-keygen -r /dev/urandom -a hmac-md5 -b 128 -n HOST rndc-key 
+key "rndc-key" {
+  algorithm hmac-md5;
+  secret "XhWQPshdd/+APS2jDF9wOA==";
+};
+</code></pre>
+
+<hr />
+
+<h3>/etc/bind/named.conf</h3>
+
+<pre><code>include "/etc/bind/rndc.key";
+
+acl mynet {
+        172.16.10.0/24;
+        172.16.11.0/24;
+};
+
+controls { inet 127.0.0.1 port 953 allow { localhost; none; } keys { rndc-key; }; };
+
+options {
+        directory "/var/bind/";
+        listen-on { 172.20.35.11; };
+    version "DNS Server";
+        recursive-clients 5000;
+        minimal-responses yes;
+        allow-transfer { none; };
+        allow-update { none; };
+        allow-query { localhost; mynet; none; };
+        allow-recursion { localhost; mynet; none; };
+
+        // listen-on-v6 { ::1; 2001:16c0:2:3545::3; };
+        // forward first;
+        // forward only;
+        // forwarders { 217.218.127.127; 8.8.8.8; };
+};
+
+logging {
+        channel default_log {
+                file "/var/log/named/named.log" versions 5 size 50M;
+                print-time yes;
+                print-severity yes;
+                print-category yes;
+        };
+        category default { default_log; };
+        category general { default_log; };
+};
+
+zone "." {
+    type hint;
+    file "named.root";
+};
+
+zone "localhost" {
+    type master;
+    file "localhost/localhost.fwd";
+    allow-update { none; };
+};
+
+zone "0.0.127.in-addr.arpa" IN {
+    type master;
+    file "localhost/localhost.rev";
+    allow-update { none; };
+};
+
+// zone "wikipedia.org"           { type forward; forwarders { 8.8.8.8; }; };
+// zone "google.com"              { type forward; forwarders { 127.0.0.1; }; };
+// zone "gmail.com"               { type forward; forwarders { 127.0.0.1; }; };
+// zone "gstatic.com"             { type forward; forwarders { 127.0.0.1; }; };
+// zone "googleusercontent.com"   { type forward; forwarders { 127.0.0.1; }; };
+// zone "googleaips.com"          { type forward; forwarders { 127.0.0.1; }; };
+// zone "google-analytics.com"    { type forward; forwarders { 127.0.0.1; }; };
+// zone "dell.com"                { type forward; forwarders { 127.0.0.1; }; };
+</code></pre>
+
+<hr />
+
+<h3>/var/bind/localhost/localhost.fwd</h3>
+
+<pre><code>$TTL 1D
+$ORIGIN localhost.
+@                       SOA     @       root (
+                                1       ; Serial
+                                3H      ; Refresh
+                                15M     ; Retry
+                                1W      ; Expiry
+                                1D )    ; Minimum
+
+                        NS      @
+                        A       127.0.0.1
+</code></pre>
+
+<hr />
+
+<h3>/var/bind/localhost/localhost.rev</h3>
+
+<pre><code>$TTL 1D
+@               SOA     localhost.      root.localhost. (
+                                1       ; Serial
+                                3H      ; Refresh
+                                15M     ; Retry
+                                1W      ; Expiry
+                                1D )    ; Minimum
+
+                NS      localhost.
+1               PTR     localhost.
+</code></pre>
+
+<hr />
+
+<h3>/etc/bind/rc.bind</h3>
+
+<pre><code>#!/bin/bash
+### BEGIN INIT INFO
+# Provides:          rc.bind
+# Required-Start:    $remote_fs $syslog
+# Required-Stop:     $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Start named at boot time
+# Description:       Enable service provided by bind name server.
+### END INIT INFO
+#
+# BIND name server
+#
+
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+DAEMON="named"
+PID_FILE="/opt/bind/var/run/named/named.pid"
+START="/opt/bind/sbin/named"
+TIMEOUT="10"
+BIND_OPTIONS="-4 -n 6 -c /etc/bind/named.conf"
+RNDC="/opt/bind/sbin/rndc"
+RDNC_OPTIONS="-k /etc/bind/rndc.key"
+
+start()
+{
+        echo "Starting $DAEMON : $START "
+        PROCESS=$(ps -A | egrep " ${DAEMON}$")
+        if [ "$PROCESS" == "" ]; then
+                if [ -e "$PID_FILE" ] ; then
+                rm "${PID_FILE}"
+                fi
+                $START ${BIND_OPTIONS}
+                ps -A | egrep " ${DAEMON}$"
+                echo
+        else
+                echo "$DAEMON is already running !!!"
+        fi
+}
+
+stop()
+{
+        echo -n "Stopping $DAEMON "
+        $RNDC $RDNC_OPTIONS stop
+        sleep 1
+        for I in $(seq 1 $TIMEOUT); do
+                PROCESS=$(ps -A | egrep " ${DAEMON}$")
+                if [ "${PROCESS}" == "" ]; then
+                        break
+                else
+                        echo -n "${I} "
+                fi
+                sleep 1
+        done
+        echo
+        PROCESS=$(ps -A | egrep " ${DAEMON}$")
+        if [ "${PROCESS}" != "" ]; then
+                echo "Force killing ${DAEMON}..."
+                killall named 
+            #2&gt; /dev/null
+        fi
+        ps -A | egrep " ${DAEMON}$"
+}
+
+reload() 
+{
+        $RNDC $RDNC_OPTIONS reload
+}
+
+status() 
+{
+        $RNDC $RDNC_OPTIONS status
+}
+
+case "$1" in
+        'start')
+                start
+                ;;
+        'stop')
+                stop
+                ;;
+        'restart')
+                stop
+                sleep 1
+                start
+                ;;
+        *)
+                echo "usage $0 start|stop|restart|reload|status"
+                ;;
+esac
+</code></pre>
+
+<hr />
+
+<h3>/var/bind/named.root</h3>
+
+<pre><code>;       This file holds the information on root name servers needed to
+;       initialize cache of Internet domain name servers
+;       (e.g. reference this file in the "cache  .  &lt;file&gt;"
+;       configuration file of BIND domain name servers).
+;
+;       This file is made available by InterNIC 
+;       under anonymous FTP as
+;           file                /domain/named.cache
+;           on server           FTP.INTERNIC.NET
+;       -OR-                    RS.INTERNIC.NET
+;
+;       last update:    Jan 3, 2013
+;       related version of root zone:   2013010300
+;
+; formerly NS.INTERNIC.NET
+;
+.                        3600000  IN  NS    A.ROOT-SERVERS.NET.
+A.ROOT-SERVERS.NET.      3600000      A     198.41.0.4
+A.ROOT-SERVERS.NET.      3600000      AAAA  2001:503:BA3E::2:30
+;
+; FORMERLY NS1.ISI.EDU
+;
+.                        3600000      NS    B.ROOT-SERVERS.NET.
+B.ROOT-SERVERS.NET.      3600000      A     192.228.79.201
+;
+; FORMERLY C.PSI.NET
+;
+.                        3600000      NS    C.ROOT-SERVERS.NET.
+C.ROOT-SERVERS.NET.      3600000      A     192.33.4.12
+;
+; FORMERLY TERP.UMD.EDU
+;
+.                        3600000      NS    D.ROOT-SERVERS.NET.
+D.ROOT-SERVERS.NET.      3600000      A     199.7.91.13
+D.ROOT-SERVERS.NET.  3600000      AAAA  2001:500:2D::D
+;
+; FORMERLY NS.NASA.GOV
+;
+.                        3600000      NS    E.ROOT-SERVERS.NET.
+E.ROOT-SERVERS.NET.      3600000      A     192.203.230.10
+;
+; FORMERLY NS.ISC.ORG
+;
+.                        3600000      NS    F.ROOT-SERVERS.NET.
+F.ROOT-SERVERS.NET.      3600000      A     192.5.5.241
+F.ROOT-SERVERS.NET.      3600000      AAAA  2001:500:2F::F
+;
+; FORMERLY NS.NIC.DDN.MIL
+;
+.                        3600000      NS    G.ROOT-SERVERS.NET.
+G.ROOT-SERVERS.NET.      3600000      A     192.112.36.4
+;
+; FORMERLY AOS.ARL.ARMY.MIL
+;
+.                        3600000      NS    H.ROOT-SERVERS.NET.
+H.ROOT-SERVERS.NET.      3600000      A     128.63.2.53
+H.ROOT-SERVERS.NET.      3600000      AAAA  2001:500:1::803F:235
+;
+; FORMERLY NIC.NORDU.NET
+;
+.                        3600000      NS    I.ROOT-SERVERS.NET.
+I.ROOT-SERVERS.NET.      3600000      A     192.36.148.17
+I.ROOT-SERVERS.NET.      3600000      AAAA  2001:7FE::53
+;
+; OPERATED BY VERISIGN, INC.
+;
+.                        3600000      NS    J.ROOT-SERVERS.NET.
+J.ROOT-SERVERS.NET.      3600000      A     192.58.128.30
+J.ROOT-SERVERS.NET.      3600000      AAAA  2001:503:C27::2:30
+;
+; OPERATED BY RIPE NCC
+;
+.                        3600000      NS    K.ROOT-SERVERS.NET.
+K.ROOT-SERVERS.NET.      3600000      A     193.0.14.129
+K.ROOT-SERVERS.NET.      3600000      AAAA  2001:7FD::1
+;
+; OPERATED BY ICANN
+;
+.                        3600000      NS    L.ROOT-SERVERS.NET.
+L.ROOT-SERVERS.NET.      3600000      A     199.7.83.42
+L.ROOT-SERVERS.NET.      3600000      AAAA  2001:500:3::42
+;
+; OPERATED BY WIDE
+;
+.                        3600000      NS    M.ROOT-SERVERS.NET.
+M.ROOT-SERVERS.NET.      3600000      A     202.12.27.33
+M.ROOT-SERVERS.NET.      3600000      AAAA  2001:DC3::35
+; End of File
+</code></pre>
+
+<hr />
+
+<h3>Add to /root/.bashrc</h3>
+
+<pre><code># PATH
+PATH="/opt/bind/bin:/opt/bind/sbin:$PATH"
+</code></pre>
+
+<hr />
+
+<h3>Starting bind dns server</h3>
+
+<pre><code>chmod  +x /etc/bind/rc.bind
+ln -sfn /etc/bind/rc.bind /etc/rc.d/rc.bind
+/etc/rc.d/rc.bind start
+</code></pre>
+
+<hr />
+
+<h3>libsodium</h3>
+
+<pre><code>cd /usr/src
+wget --no-check-certificate "https://download.libsodium.org/libsodium/releases/libsodium-0.4.5.tar.gz"
+
+FILE="libsodium-0.4.5.tar.gz"
+SERVER="download.libsodium.org"
+LOCAL="$(openssl dgst -sha256 $FILE | sed -e 's,.*= ,,')"
+REMOTE="$(dig +short +dnssec TXT $FILE.$SERVER | head -n 1 |sed -e 's,",,g')"
+echo $LOCAL; echo $REMOTE
+[ "$LOCAL" != "$REMOTE" ] &amp;&amp; echo "SHA256 digest not match ..."
+
+su - install
+cd /usr/src/
+tar xf libsodium-0.4.5.tar.gz
+cd libsodium-0.4.5
+./configure --prefix=/usr &amp;&amp; make
+make install DESTDIR=/usr/local/encap/libsodium-0.4.5
+logout
+cd /usr/local/encap/
+chown -R root:root libsodium-0.4.5/
+epkg libsodium-0.4.5/
+ldconfig
+</code></pre>
+
+<hr />
+
+<h3>dnscrypt-proxy (http://dnscrypt.org/)</h3>
+
+<pre><code>cd /usr/src/
+wget "http://download.dnscrypt.org/dnscrypt-proxy/dnscrypt-proxy-1.3.3.tar.bz2"
+
+FILE="dnscrypt-proxy-1.3.3.tar.bz2"
+SERVER="download.dnscrypt.org"
+LOCAL="$(openssl dgst -sha256 $FILE | sed -e 's,.*= ,,')"
+REMOTE="$(dig +short +dnssec TXT $FILE.$SERVER | head -n 1 | sed -e 's,",,g')"
+echo $LOCAL; echo $REMOTE
+[ "$LOCAL" != "$REMOTE" ] &amp;&amp; echo "SHA256 digest not match ..."
+
+su - install
+cd /usr/src/
+tar xf dnscrypt-proxy-1.3.3.tar.bz2
+cd dnscrypt-proxy-1.3.3
+./configure --prefix=/usr &amp;&amp; make
+make install DESTDIR=/usr/local/encap/dnscrypt-proxy-1.3.3
+cd /usr/local/encap/dnscrypt-proxy-1.3.3
+mv usr/share/man/ usr/
+logout
+cd /usr/local/encap/
+epkg dnscrypt-proxy-1.3.3/
+</code></pre>
+
+<hr />
+
+<h3>/etc/rc.d/rc.local</h3>
+
+<pre><code>/usr/sbin/dnscrypt-proxy --daemonize
+/etc/rc.d/rc.bind restart
+</code></pre>
+
+<hr />
+
+<h3>/etc/bind/named.conf</h3>
+
+<pre><code>zone "google.com"              { type forward; forwarders { 127.0.0.1; }; };
+zone "gmail.com"               { type forward; forwarders { 127.0.0.1; }; };
+zone "gstatic.com"             { type forward; forwarders { 127.0.0.1; }; };
+zone "googleusercontent.com"   { type forward; forwarders { 127.0.0.1; }; };
+zone "googleaips.com"          { type forward; forwarders { 127.0.0.1; }; };
+zone "google-analytics.com"    { type forward; forwarders { 127.0.0.1; }; };
+zone "dell.com"                { type forward; forwarders { 127.0.0.1; }; };
+</code></pre>
+
+<hr />
+
+<h3>Notes</h3>
+
+<pre><code>dnscrypt-proxy --daemonize \
+    --pidfile=/var/run/dnscrypt-proxy.pid \
+    --local-address=127.0.0.1:53 \
+    --logfile=/var/log/dnscrypt-proxy.log \
+    --max-active-requests=2500 \
+    --resolver-address=178.216.201.222:2053 \
+    --provider-name=2.dnscrypt-cert.soltysiak.com \
+    --provider-key="25C4:E188:2915:4697:8F9C:2BBD:B6A7:AFA4:01ED:A051:0508:5D53:03E7:1928:C066:8F21"
+
+
+dnscrypt-proxy --daemonize \
+    --pidfile=/var/run/dnscrypt-proxy.pid \
+    --local-address=127.0.0.1:53 \
+    --logfile=/var/log/dnscrypt-proxy.log \
+    --max-active-requests=2500 \
+    --resolver-address=173.45.106.219:2050 \
+    --provider-name=2.dnscrypt-cert.rahanet.com \
+    --provider-key="0EB5:2BA4:54B8:A730:F100:9416:158C:715C:E4C2:0C18:7463:CF15:479A:A632:DB9C:4A3F"
+
+
+
+
+#--user=&lt;user name&gt;
+
+
+--resolver-port=&lt;port&gt; option. For example, OpenDNS servers reply to queries sent to ports 53, 443 and 5353.
+
+The --tcp-only command-line switch forces this behavior. When an incoming query is received, the daemon immediately replies with a "response truncated" message, forcing the client to retry over TCP. The daemon then authenticates the query and forwards it over TCP to the resolver.
+
+### Links
+
+http://dnscrypt.org/                                                                                                                        
+https://github.com/Cofyc/dnscrypt-wrapper
+https://github.com/jedisct1/dnscrypt-proxy
+https://github.com/jedisct1/libsodium
+http://cr.yp.to/highspeed/coolnacl-20111201.pdf
+http://dnscurve.org/
+https://cloudns.com.au/
+http://dnscrypt.eu/
+http://dc1.soltysiak.com/
+http://unbound.net/
+https://calomel.org/unbound_dns.html
+
+Client side:
+
+
+### TECHNOTES
+
+
+Implementation details
+======================
+
+Cryptographic library
+---------------------
+
+- The wheel hasn't been reinvented.
+
+- The crypto code is provided by NaCl: http://nacl.cr.yp.to/ through
+  libsodium: https://github.com/jedisct1/libsodium
+
+- Why NaCl? Unbloated, blazing fast, and less error-prone that other libraries.
+  See http://cr.yp.to/highspeed/coolnacl-20111201.pdf
+
+- crypto_box_curve25519xsalsa20poly1305_*() for authenticating/encrypting
+  queries and replies, crypto_sign_ed25519_*() for signing certificates, and
+  crypto_stream_salsa20() as a PRNG.
+
+  See the NaCl documentation for details.
+
+Event-notification library
+--------------------------
+
+- Uses libevent. Unbound's boilerplate is also excellent, but it hasn't been
+  packaged as a standalone library yet.
+
+- Because it is totally awesome for writing portable software.
+
+- Bundled with dnscrypt, for now, because it's a modified version (so
+  that evdns can cope with TXT records) and because some distributions
+  are still shipping dead old versions.
+
+Certificates
+------------
+
+The following information has to be provided to the proxy:
+
+- The provider name (defaults to 2.dnscrypt-cert.opendns.com.)
+- The provider public key (defaults to the current one for OpenDNS).
+- The resolver IP address (defaults to 208.67.220.220).
+
+At startup and every 60 minute, the proxy directly connects to the specified
+resolver IP address and issues a TXT query for the provider name. The
+first component of the provider name indicates the latest protocol version,
+or the version range, supported by the client. Right now, this should
+be 2. Always.
+
+One or more TXT records are returned, each containing a signed certificate.
+The provider public key is only used to verify a certificate, never for
+authenticating/encrypting queries.
+
+Certificates have the following header:
+- 4 byte magic header DNSC
+- 2 byte major version
+- 2 byte minor version
+
+Followed by signed content (the signature adds 512 bits to the payload):
+- server 256-bit public key
+- 8 byte magic header to use for queries using this specific key
+- 4 byte serial number
+- 4 + 4 byte validity period (two timestamps)
+
+This is the current structure of the second version of the protocol.
+Don't assume anything about its length, it is very likely to change
+after a version bump.
+
+The proxy drops invalid certificates for the current date, and picks the one
+with the highest serial number.
+
+More than one certificate may be returned when keys rollovers or
+function changes are performed.
+
+Resolvers are never signing certificates themselves, they are just providing
+pre-signed certificates.
+
+Queries
+-------
+
+Queries and replies are basically using djb's dnscurve protocol:
+http://www.dnscurve.org/
+
+The proxy always generates a new, in-memory only key pair at startup.
+
+Random padding is added to queries and replies, using a 64 byte block size.
+
+Encrypted queries are prefixed with the following header structure:
+
+- 8 byte magic header (provided by the chosen certificate)
+- A 256 bit client public key
+- A 96 bit client nonce (64 bit monotically increasing timestamp +
+  32 random bits)
+- A 128 bit Poly1305-AES MAC
+
+Replies are prefixed with the following header structure:
+
+- 8 byte static magic header r6fnvWJ8
+- A 192 bit nonce: the 96 bit client-supplied nonce + a 96 bit server
+nonce extension.
+- A 128 bit Poly1305-AES MAC.
+
+The proxy immediately discards replies to queries made more than 10
+second ago and replies that don't match the client-supplied nonce.
+
+Miscellaneous
+-------------
+
+If you need extra monitoring/profiling, the proxy provides a bunch of
+DTrace probes on OSX, as the dnscrypt-proxy provider.
+See src/dnscrypt-proxy/probes_dnscrypt_proxy.d
+
+The proxy doesn't cache replies. Neither does it perform any DNSSEC
+validation yet.
+
+This is better handled by a separate process or by linking libunbound.
+
+The proxy does alter queries, though, in order to:
+
+- immediately reply with a "reply truncated" message to a UDP query when
+the --tcp-port switch has been turned on.
+
+- add an empty OPT section in order to advertise a payload size unless
+an EDNS section was already present or unless --payload-size with a
+&lt; 512 bytes size has been specified.
+
+OSX Mountain Lion, OpenBSD/amd64 and Dragonfly BSD/amd64 are the primary
+development platforms, but the code has been designed to be as
+portable as possible, and patches to support other operating systems
+and architectures are more than welcome.
+
+
+### README.markdown
+
+[![Build Status](https://travis-ci.org/jedisct1/dnscrypt-proxy.png?branch=master)](https://travis-ci.org/jedisct1/dnscrypt-proxy?branch=master)
+
+[DNSCrypt](http://dnscrypt.org)
+===============================
+
+A tool for securing communications between a client and a DNS resolver.
+
+Description
+-----------
+
+dnscrypt-proxy provides local service which can be used directly as
+your local resolver or as a DNS forwarder, encrypting and
+authenticating requests using the DNSCrypt protocol and passing them
+to an upstream server, by default OpenDNS.
+
+The DNSCrypt protocol uses high-speed high-security elliptic-curve
+cryptography and is very similar to [DNSCurve](http://dnscurve.org/),
+but focuses on securing communications between a client and its first-level
+resolver.
+
+While not providing end-to-end security, it protects the local
+network, which is often the weakest point of the chain, against
+man-in-the-middle attacks. It also provides some confidentiality to
+DNS queries.
+
+Current list of free, DNSCrypt-enabled resolvers
+------------------------------------------------
+
+* [OpenDNS](http://www.opendns.com)
+  - Server address: 208.67.220.220:443
+  - Provider name: 2.dnscrypt-cert.opendns.com
+  - Public key: B735:1140:206F:225D:3E2B:D822:D7FD:691E:A1C3:3CC8:D666:8D0C:BE04:BFAB:CA43:FB79
+
+* [CloudNS](https://cloudns.com.au/) - No logs, DNSSEC
+  * Canberra, Australia
+    - Server address: 113.20.6.2:443 or gc2tzw6lbmeagrp3.onion:443
+    - Provider name: 2.dnscrypt-cert.cloudns.com.au
+    - Public key: 1971:7C1A:C550:6C09:F09B:ACB1:1AF7:C349:6425:2676:247F:B738:1C5A:243A:C1CC:89F4
+  * Sydney, Australia
+    - Server address: 113.20.8.17:443 or l65q62lf7wnfme7m.onion:443
+    - Provider name: 2.dnscrypt-cert-2.cloudns.com.au
+    - Public key: 67A4:323E:581F:79B9:BC54:825F:54FE:1025:8B4F:37EB:0D07:0BCE:4010:6195:D94F:E330
+
+* [OpenNIC](http://www.opennicproject.org/) - No logs
+  * Japan
+    - Server address: 106.186.17.181:2053
+    - Provider name: 2.dnscrypt-cert.ns2.jp.dns.opennic.glue
+    - Public key: 8768:C3DB:F70A:FBC6:3B64:8630:8167:2FD4:EE6F:E175:ECFD:46C9:22FC:7674:A1AC:2E2A
+
+* [DNSCrypt.eu](http://dnscrypt.eu/) - No logs, DNSSEC
+  * Holland
+    - Server address: 176.56.237.171:443
+    - Provider name: 2.dnscrypt-cert.dnscrypt.eu
+    - Public key: 67C0:0F2C:21C5:5481:45DD:7CB4:6A27:1AF2:EB96:9931:40A3:09B6:2B8D:1653:1185:9C66
+
+* [Soltysiak.com](http://dc1.soltysiak.com/) - No logs, DNSSEC
+  * Poznan, Poland
+    - Server address: 178.216.201.222:2053
+    - Provider name: 2.dnscrypt-cert.soltysiak.com
+    - Public key: 25C4:E188:2915:4697:8F9C:2BBD:B6A7:AFA4:01ED:A051:0508:5D53:03E7:1928:C066:8F21
+
+
+Download and integrity check
+----------------------------
+
+DNSCrypt can be downloaded here: [dnscrypt download](http://dnscrypt.org)
+
+After having downloaded a file, compute its SHA256 digest. For example:
+
+    $ openssl dgst -sha256 dnscrypt-proxy-1.3.3.tar.bz2
+
+Verify this digest against the expected one, that can be retrieved
+using a simple DNS query:
+
+    $ drill -D TXT dnscrypt-proxy-1.3.3.tar.bz2.download.dnscrypt.org
+
+or
+
+    $ dig +dnssec TXT dnscrypt-proxy-1.3.3.tar.bz2.download.dnscrypt.org
+
+If the content of the TXT record doesn't match the SHA256 digest you
+computed, please file a bug report on Github as soon as possible and
+don't go any further.
+
+Installation
+------------
+
+The daemon is known to work on recent versions of OSX, OpenBSD,
+Bitrig, NetBSD, Dragonfly BSD, FreeBSD, Linux, iOS (requires a
+jailbroken device), Android (requires a rooted device), Solaris
+(SmartOS) and Windows (requires MingW).
+
+Install [libsodium](https://github.com/jedisct1/libsodium).
+On Linux, don't forget to run `ldconfig` if you installed it from
+source.
+
+On Fedora, RHEL and CentOS, you may need to add `/usr/local/lib` to
+the paths the dynamic linker is going to look at. Before issuing
+`ldconfig`, type:
+
+    # echo /usr/local/lib &gt; /etc/ld.so.conf.d/usr_local_lib.conf
+
+Now, download the latest dnscrypt-proxy version and extract it:
+
+    $ bunzip2 -cd dnscrypt-proxy-*.tar.bz2 | tar xvf -
+    $ cd dnscrypt-proxy-*
+
+Compile and install it using the standard procedure:
+
+    $ ./configure &amp;&amp; make -j2
+    # make install
+
+Replace `-j2` with whatever number of CPU cores you want to use for the
+compilation process.
+
+The proxy will be installed as `/usr/local/sbin/dnscrypt-proxy` by default.
+
+Command-line switches are documented in the `dnscrypt-proxy(8)` man page.
+
+*Note:* gcc 3.4.6 (and probably other similar versions) is known to
+produce broken code on Mips targets with the -Os optimization level.
+Use a different level (-O and -O2 are fine) or upgrade the compiler.
+Thanks to Adrian Kotelba for reporting this.
+
+GUI for dnscrypt-proxy
+----------------------
+
+If you need a simple graphical user interface in order to start/stop
+the proxy and change your DNS settings, check out the following
+project:
+
+- [DNSCrypt WinClient](https://github.com/FivfBx2dOQTC3gc8YS4yMNo0el/dnscrypt-winclient):
+Easily enable/disable DNSCrypt on multiple adapters. Supports
+different ports and protocols, IPv6, parental controls and the proxy
+can act as a gateway service. Windows only, written in .NET. Designed
+for OpenDNS and CloudNS.
+
+Server-side proxy
+-----------------
+
+[DNSCrypt-Wrapper](https://github.com/Cofyc/dnscrypt-wrapper) is a
+server-side dnscrypt proxy that works with any name resolver.
+
+Usage
+-----
+
+Having a dedicated system user, with no privileges and with an empty
+home directory, is highly recommended. For extra security, DNSCrypt
+will chroot() to this user's home directory and drop root privileges
+for this user's uid as soon as possible.
+
+The easiest way to start the daemon is:
+
+    # dnscrypt-proxy --daemonize
+
+The proxy will accept incoming requests on 127.0.0.1, tag them with an
+authentication code, forward them to OpenDNS resolvers, and validate
+each answer before passing it to the client.
+
+Given such a setup, in order to actually start using DNSCrypt, you
+need to update your `/etc/resolv.conf` file and replace your current
+set of resolvers with:
+
+    nameserver 127.0.0.1
+
+Other common command-line switches include:
+
+* `--daemonize` in order to run the server as a background process.
+* `--local-address=&lt;ip&gt;[:port]` in order to locally bind a different IP
+address than 127.0.0.1
+* `--logfile=&lt;file&gt;` in order to write log data to a dedicated file. By
+  default, logs are sent to stdout if the server is running in foreground,
+  and to syslog if it is running in background.
+* `--loglevel=&lt;level&gt;` if you need less verbosity in log files.
+* `--max-active-requests=&lt;count&gt;` to set the maximum number of active
+  requests. The default value is 250.
+* `--pid-file=&lt;file&gt;` in order to store the PID number to a file.
+* `--user=&lt;user name&gt;` in order to chroot()/drop privileges.
+* `--test` in order to check that the server-side proxy is properly
+configured and that a valid certificate can be used. This is useful
+for monitoring your own dnscrypt proxy. See the man page for more
+information.
+
+DNSCrypt comes pre-configured for OpenDNS, although the
+`--resolver-address=&lt;ip&gt;[:port]`,
+`--provider-name=&lt;certificate provider FQDN&gt;`
+and `--provider-key=&lt;provider public key&gt;` can be specified in
+order to change the default settings.
+
+Installation as a service (Windows only)
+----------------------------------------
+
+The proxy can be installed as a Windows service.
+
+Copy the `dnscrypt-proxy.exe` file to any location, as well as the
+`libsodium-4.dll` file. Both should be in the same location. If you
+are using plugins depending on ldns, copy the ldns DLL as well. Then open a
+terminal and type (eventually with the full path to `dnscrypt-proxy.exe`):
+
+    dnscrypt-proxy.exe --install
+
+It will install a new service named `dnscrypt-proxy`.
+
+After being stopped, the service can be removed with:
+
+    dnscrypt-proxy.exe --uninstall
+
+Using DNSCrypt in combination with a DNS cache
+----------------------------------------------
+
+The DNSCrypt proxy is **not** a DNS cache. This means that incoming
+queries will **not** be cached and every single query will require a
+round-trip to the upstream resolver.
+
+For optimal performance, the recommended way of running DNSCrypt is to
+run it as a forwarder for a local DNS cache, like `unbound` or
+`powerdns-recursor`.
+
+Both can safely run on the same machine as long as they are listening
+to different IP addresses (preferred) or different ports.
+
+If your DNS cache is `unbound`, all you need is to edit the
+`unbound.conf` file and add the following lines at the end of the `server`
+section:
+
+    do-not-query-localhost: no
+
+    forward-zone:
+      name: "."
+      forward-addr: 127.0.0.1@40
+
+The first line is not required if you are using different IP addresses
+instead of different ports.
+
+Then start `dnscrypt-proxy`, telling it to use a specific port (`40`, in
+this example):
+
+    # dnscrypt-proxy --local-address=127.0.0.1:40 --daemonize
+
+IPv6 support
+------------
+
+IPv6 is fully supported. IPv6 addresses with a port number should be
+specified as [ip]:port
+
+    # dnscrypt-proxy --local-address='[::1]:40' --daemonize
+
+Queries using nonstandard ports / over TCP
+------------------------------------------
+
+Some routers and firewalls can block outgoing DNS queries or
+transparently redirect them to their own resolver. This especially
+happens on public Wifi hotspots, such as coffee shops.
+
+As a workaround, the port number can be changed using
+the `--resolver-port=&lt;port&gt;` option. For example, OpenDNS servers
+reply to queries sent to ports 53, 443 and 5353.
+
+By default, dnscrypt-proxy sends outgoing queries to UDP port 443.
+
+In addition, the DNSCrypt proxy can force outgoing queries to be
+sent over TCP. For example, TCP port 443, which is commonly used for
+communication over HTTPS, may not be filtered.
+
+The `--tcp-only` command-line switch forces this behavior. When
+an incoming query is received, the daemon immediately replies with a
+"response truncated" message, forcing the client to retry over TCP.
+The daemon then authenticates the query and forwards it over TCP
+to the resolver.
+
+`--tcp-only` is slower than UDP because multiple queries over a single
+TCP connections aren't supported yet, and this workaround should
+never be used except when bypassing a filter is actually required.
+
+EDNS payload size
+-----------------
+
+DNS packets sent over UDP have been historically limited to 512 bytes,
+which is usually fine for queries, but sometimes a bit short for
+replies.
+
+Most modern authoritative servers, resolvers and stub resolvers
+support the Extension Mechanism for DNS (EDNS) that, among other
+things, allows a client to specify how large a reply over UDP can be.
+
+Unfortunately, this feature is disabled by default on a lot of
+operating systems. It has to be explicitly enabled, for example by
+adding `options edns0` to the `/etc/resolv.conf` file on most
+Unix-like operating systems.
+
+`dnscrypt-proxy` can transparently rewrite outgoing packets before
+authenticating them, in order to add the EDNS0 mechanism. By
+default, a conservative payload size of 1252 bytes is advertised.
+
+This size can be made larger by starting the proxy with the
+`--edns-payload-size=&lt;bytes&gt;` command-line switch. Values up to 4096
+are usually safe.
+
+A value below or equal to 512 will disable this mechanism, unless a
+client sends a packet with an OPT section providing a payload size.
+
+The `hostip` utility
+--------------------
+
+The DNSCrypt proxy ships with a simple tool named `hostip` that
+resolves a name to IPv4 or IPv6 addresses.
+
+This tool can be useful for starting some services before
+`dnscrypt-proxy`.
+
+Queries made by `hostip` are not authenticated.
+</code></pre>
+
+<hr />
+
+<p><em>BY: Pejman Moghadam</em> <br />
+<em>TAG: bind, dnscrypt</em> <br />
+<em>DATE: 2014-03-22 14:36:58</em>  </p>
