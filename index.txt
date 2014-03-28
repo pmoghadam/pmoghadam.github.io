@@ -1,4 +1,5 @@
 Pejman Moghadam
 ===============
 
-[BIND / DNSCrypt](bind-dnscrypt.html)
+#### Notes and Drafts
+
